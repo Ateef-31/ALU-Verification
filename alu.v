@@ -45,16 +45,16 @@ module alu #(parameter N = 8 , parameter M = 4)
 
     always @(posedge CLK or posedge RST) begin
         if (RST) begin
-            res <= 0; 
-            oflow <= 0; 
+            res <= 0;
+            oflow <= 0;
             cout <= 0;
-            g <= 0; 
-            l <= 0; 
-            e <= 0; 
+            g <= 0;
+            l <= 0;
+            e <= 0;
             err <= 0;
-            mul_state <= 0; 
+            mul_state <= 0;
             res_x_phase <= 0;
-            opa_reg <= 0; 
+            opa_reg <= 0;
             opb_reg <= 0;
             temp <= 0;
             mul_result <= 0;
@@ -63,11 +63,11 @@ module alu #(parameter N = 8 , parameter M = 4)
 
         else if (CE) begin
             // Default assignments
-            oflow <= 0; 
+            oflow <= 0;
             cout <= 0;
-            g <= 0; 
-            l <= 0; 
-            e <= 0; 
+            g <= 0;
+            l <= 0;
+            e <= 0;
             err <= 0;  // Default error is 0
             temp <= 0;
             mul_result <= 0;
@@ -107,18 +107,28 @@ module alu #(parameter N = 8 , parameter M = 4)
 
                 2'd2: begin
                     if (!MODE || CMD != 4'd9) begin
+                        
                         mul_state <= 2'd0;
                         res_x_phase <= 0;
                     end
+                    
                     else begin
                         mul_result = (opa_reg + 1) * (opb_reg + 1);
                         res <= mul_result;
                         cout <= 1'b0;
                         res_x_phase <= 0;
-                        mul_state <= 2'd0;
+                        if(OPA == opa_reg && OPB == opb_reg)
+                            mul_state <= 2'd0;
+                        else if(OPA != opa_reg && OPB != opb_reg) begin
+                            opa_reg <= OPA;
+                            opb_reg <= OPB;
+                            mul_state <= 2'd1;
+                            end
+                        else
+                            mul_state <= 2'd0;
                     end
                 end
-                
+
                 default: begin
                     mul_state <= 2'd0;
                     err <= 0;
@@ -126,7 +136,7 @@ module alu #(parameter N = 8 , parameter M = 4)
                 end
                 endcase
             end
-            
+
             else if (MODE && CMD == 4'd10) begin
                 case(mul_state)
                 2'd0: begin
@@ -171,10 +181,18 @@ module alu #(parameter N = 8 , parameter M = 4)
                         res <= mul_result;
                         cout <= 1'b0;
                         res_x_phase <= 0;
-                        mul_state <= 2'd0;
+                        if(OPA == opa_reg && OPB == opb_reg)
+                            mul_state <= 2'd0;
+                        else if(OPA != opa_reg && OPB != opb_reg) begin
+                            opa_reg <= OPA;
+                            opb_reg <= OPB;
+                            mul_state <= 2'd1;
+                            end
+                        else
+                        mul_state <= 2'd0; 
                     end
                 end
-                
+
                 default: begin
                     mul_state <= 2'd0;
                     err <= 0;
@@ -189,34 +207,33 @@ module alu #(parameter N = 8 , parameter M = 4)
                 if (MODE) begin
                     case(CMD)
                     4'd0: if(INP_VALID == 2'b11) begin
-                        res <= OPA + OPB;
-                        cout <= res[N];
+                        {cout, res[N-1:0]} <= OPA + OPB;
                     end
-                    
+
                     4'd1: if(INP_VALID == 2'b11) begin
                         res <= OPA - OPB;
                     end
-                    
+
                     4'd2: if(INP_VALID == 2'b11) begin
-                        {cout, res} <= OPA + OPB + CIN;
+                        {cout, res[N-1:0]} <= OPA + OPB + CIN;
                     end
-                    
+
                     4'd3: if(INP_VALID == 2'b11) begin
                         res <= OPA - OPB - CIN;
                     end
-                    
+
                     4'd4: if(INP_VALID == 2'b01) begin
                         {cout, res} <= OPA + 1;
                     end
-                    
+
                     4'd5: if(INP_VALID == 2'b01) begin
                         res <= OPA - 1;
                     end
-                    
+
                     4'd6: if(INP_VALID == 2'b10) begin
                         {cout, res} <= OPB + 1;
                     end
-                    
+
                     4'd7: if(INP_VALID == 2'b10) begin
                         res <= OPB - 1;
                     end
@@ -243,7 +260,7 @@ module alu #(parameter N = 8 , parameter M = 4)
                         g <= ($signed(OPA) > $signed(OPB));
                         e <= ($signed(OPA) == $signed(OPB));
                         l <= ($signed(OPA) < $signed(OPB));
-                    end                   
+                    end
                     default: err <= 0;
                     endcase
                 end
@@ -259,7 +276,7 @@ module alu #(parameter N = 8 , parameter M = 4)
                     4'd6: if(INP_VALID == 2'b01) res <= ~OPA;
                     4'd7: if(INP_VALID == 2'b10) res <= ~OPB;
                     4'd8: if(INP_VALID == 2'b01) res <= (OPA >> 1);
-                    4'd9: if(INP_VALID == 2'b01) res <= (OPA << 1);                  
+                    4'd9: if(INP_VALID == 2'b01) res <= (OPA << 1);
                     4'd10: if(INP_VALID == 2'b10) res <= (OPB >> 1);
                     4'd11: if(INP_VALID == 2'b10) res <= (OPB << 1);
                     4'd12: if(INP_VALID == 2'b11) begin
@@ -279,7 +296,7 @@ module alu #(parameter N = 8 , parameter M = 4)
                             res <= (OPA >> OPB[$clog2(N) - 1:0]) | (OPA << (N - OPB[$clog2(N) - 1:0]));
                             end
                     end
-                    
+
                     default: err <= 0;
                     endcase
                 end
