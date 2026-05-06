@@ -269,17 +269,6 @@ module alu #(parameter N = 8 , parameter M = 4)
                         else begin
                             res <= (OPA << OPB[$clog2(N) - 1:0]) | (OPA >> (N - OPB[$clog2(N) - 1:0]));
                             end
-//                        case(OPB[2:0])
-//                            3'd0: res <= OPA;
-//                            3'd1: res <= {OPA[N-2:0], OPA[N-1]};
-//                            3'd2: res <= {OPA[N-3:0], OPA[N-1:N-2]};
-//                            3'd3: res <= {OPA[N-4:0], OPA[N-1:N-3]};
-//                            3'd4: res <= {OPA[N-5:0], OPA[N-1:N-4]};
-//                            3'd5: res <= {OPA[N-6:0], OPA[N-1:N-5]};
-//                            3'd6: res <= {OPA[N-7:0], OPA[N-1:N-6]};
-//                            3'd7: res <= {OPA[N-8:0], OPA[N-1:N-7]};
-//                            default : res <= OPA;
-//                        endcase
                     end
 
                     4'd13: if(INP_VALID == 2'b11) begin
@@ -289,17 +278,6 @@ module alu #(parameter N = 8 , parameter M = 4)
                         else begin
                             res <= (OPA >> OPB[$clog2(N) - 1:0]) | (OPA << (N - OPB[$clog2(N) - 1:0]));
                             end
-//                        case(OPB[2:0])
-//                            3'd0: res <= OPA;
-//                            3'd1: res <= {OPA[0], OPA[N-1:1]};
-//                            3'd2: res <= {OPA[1:0], OPA[N-1:2]};
-//                            3'd3: res <= {OPA[2:0], OPA[N-1:3]};
-//                            3'd4: res <= {OPA[3:0], OPA[N-1:4]};
-//                            3'd5: res <= {OPA[4:0], OPA[N-1:5]};
-//                            3'd6: res <= {OPA[5:0], OPA[N-1:6]};
-//                            3'd7: res <= {OPA[6:0], OPA[N-1:7]};
-//                            default : res <= OPA;
-//                        endcase
                     end
                     
                     default: err <= 0;
