@@ -12,28 +12,42 @@ module alu #(parameter N = 8 , parameter M = 4)
     output reg E,
     output reg ERR
 );
+
     reg [2*N:0] res;
     reg oflow, cout, g, l, e, err;
+
     reg [N-1:0] opa_reg, opb_reg;
     reg [1:0] mul_state;
     reg res_x_phase;
-    reg [N:0] temp;  // Temporary variable for signed ops
-    reg [2*N:0] mul_result;  // To store multiply result
-    reg [N-1:0] shifted_opa;  // For CMD 10 shift left operation
+
+    reg [N:0] temp;
+    reg [2*N:0] mul_result;
+    reg [N-1:0] shifted_opa;
+
+    reg mul_invalid;
+
+    reg mul_active;
 
     wire en = CE & ~RST;
 
+    // ================= OUTPUT LOGIC =================
     always @(*) begin
         if (!en) begin
-            RES = 'b0;
-            OFLOW = 1'b0;
-            COUT = 1'b0;
-            G = 1'b0;
-            L = 1'b0;
-            E = 1'b0;
-            ERR = 1'b0;
-        end else begin
-            RES = (res_x_phase) ? {2*N+1{1'b0}} : res;
+            RES = 0; OFLOW = 0; COUT = 0;
+            G = 0; L = 0; E = 0; ERR = 0;
+        end 
+        else if (mul_active) begin
+            RES = (res_x_phase) ? 0 : res;
+            OFLOW = oflow;
+            COUT = cout;
+            G = g;
+            L = l;
+            E = e;
+            ERR = (res_x_phase) ? 0 : err;  // show only in 3rd cycle
+        end 
+        else begin
+            // Normal ops
+            RES = (res_x_phase) ? 0 : res;
             OFLOW = oflow;
             COUT = cout;
             G = g;
@@ -43,236 +57,157 @@ module alu #(parameter N = 8 , parameter M = 4)
         end
     end
 
+    // ================= MAIN LOGIC =================
     always @(posedge CLK or posedge RST) begin
         if (RST) begin
-            res <= 0;
-            oflow <= 0;
-            cout <= 0;
-            g <= 0;
-            l <= 0;
-            e <= 0;
-            err <= 0;
+            res <= 0; oflow <= 0; cout <= 0;
+            g <= 0; l <= 0; e <= 0; err <= 0;
+
             mul_state <= 0;
             res_x_phase <= 0;
-            opa_reg <= 0;
-            opb_reg <= 0;
-            temp <= 0;
-            mul_result <= 0;
-            shifted_opa <= 0;
+            opa_reg <= 0; opb_reg <= 0;
+
+            temp <= 0; mul_result <= 0; shifted_opa <= 0;
+            mul_invalid <= 0;
+            mul_active <= 0;
         end
 
         else if (CE) begin
-            // Default assignments
-            oflow <= 0;
-            cout <= 0;
-            g <= 0;
-            l <= 0;
-            e <= 0;
-            err <= 0;  // Default error is 0
-            temp <= 0;
-            mul_result <= 0;
-            shifted_opa <= 0;
+            // default flags
+            oflow <= 0; cout <= 0; g <= 0;
+            l <= 0; e <= 0; err <= 0;
 
+            // ================= MULTIPLICATION CMD=9 =================
             if (MODE && CMD == 4'd9) begin
                 case(mul_state)
+
                 2'd0: begin
                     res_x_phase <= 1;
-                    res <= 0;
-                    if (INP_VALID == 2'b11) begin
-                        opa_reg <= OPA;
-                        opb_reg <= OPB;
-                        mul_state <= 2'd1;
-                    end else begin
-                        err <= 1;  // Invalid inputs in first cycle
-                        mul_state <= 2'd0;
-                        res_x_phase <= 0;
-                    end
+                    mul_invalid <= (INP_VALID != 2'b11);
+                    mul_active <= 1;
+                    opa_reg <= OPA;
+                    opb_reg <= OPB;
+                    mul_state <= 2'd1;
                 end
 
                 2'd1: begin
                     res_x_phase <= 1;
-                    if (!MODE || CMD != 4'd9) begin
-                        mul_state <= 2'd0;
-                        res_x_phase <= 0;
-                    end
-                    else if (INP_VALID != 2'b11) begin
-                        err <= 1;  // Invalid inputs in second cycle
-                        mul_state <= 2'd0;
-                        res_x_phase <= 0;
-                    end
-                    else begin
-                        mul_state <= 2'd2;
-                    end
+                    mul_invalid <= mul_invalid | (INP_VALID != 2'b11);
+                    mul_state <= 2'd2;
                 end
 
                 2'd2: begin
-                    if (!MODE || CMD != 4'd9) begin
-                        
-                        mul_state <= 2'd0;
-                        res_x_phase <= 0;
-                    end
-                    
-                    else begin
-                        mul_result = (opa_reg + 1) * (opb_reg + 1);
-                        res <= mul_result;
-                        cout <= 1'b0;
-                        res_x_phase <= 0;
-                        if(OPA == opa_reg && OPB == opb_reg)
-                            mul_state <= 2'd0;
-                        else if(OPA != opa_reg && OPB != opb_reg) begin
-                            opa_reg <= OPA;
-                            opb_reg <= OPB;
-                            mul_state <= 2'd1;
-                            end
-                        else
-                            mul_state <= 2'd0;
-                    end
-                end
-
-                default: begin
-                    mul_state <= 2'd0;
-                    err <= 0;
                     res_x_phase <= 0;
+                    if (mul_invalid) begin
+                        err <= 1;   
+                        res <= 0;
+                    end else begin
+                        err <= 0;
+                        res <= (opa_reg + 1) * (opb_reg + 1);
+                    end
+                    mul_state <= 0;
+                    mul_active <= 0;
                 end
                 endcase
             end
 
+            // ================= MULTIPLICATION CMD=10 =================
             else if (MODE && CMD == 4'd10) begin
                 case(mul_state)
+
                 2'd0: begin
                     res_x_phase <= 1;
-                    res <= 0;
-                    if (INP_VALID == 2'b11) begin
-                        opa_reg <= OPA;
-                        opb_reg <= OPB;
-                        mul_state <= 2'd1;
-                    end else begin
-                        err <= 1;  // Invalid inputs in first cycle
-                        mul_state <= 2'd0;
-                        res_x_phase <= 0;
-                    end
+                    mul_invalid <= (INP_VALID != 2'b11);
+                    mul_active <= 1;
+                    opa_reg <= OPA;
+                    opb_reg <= OPB;
+                    mul_state <= 2'd1;
                 end
 
                 2'd1: begin
                     res_x_phase <= 1;
-                    if (!MODE || CMD != 4'd10) begin
-                        mul_state <= 2'd0;
-                        res_x_phase <= 0;
-                    end
-                    else if (INP_VALID != 2'b11) begin
-                        err <= 1;  // Invalid inputs in second cycle
-                        mul_state <= 2'd0;
-                        res_x_phase <= 0;
-                    end
-                    else begin
-                        mul_state <= 2'd2;
-                    end
+                    mul_invalid <= mul_invalid | (INP_VALID != 2'b11);
+                    mul_state <= 2'd2;
                 end
 
                 2'd2: begin
-                    if (!MODE || CMD != 4'd10) begin
-                        mul_state <= 2'd0;
-                        res_x_phase <= 0;
-                    end
-                    else begin
-                        // Shift OPA left by 1, then multiply by OPB
-                        shifted_opa = opa_reg << 1;
-                        mul_result = shifted_opa * opb_reg;
-                        res <= mul_result;
-                        cout <= 1'b0;
-                        res_x_phase <= 0;
-                        if(OPA == opa_reg && OPB == opb_reg)
-                            mul_state <= 2'd0;
-                        else if(OPA != opa_reg && OPB != opb_reg) begin
-                            opa_reg <= OPA;
-                            opb_reg <= OPB;
-                            mul_state <= 2'd1;
-                            end
-                        else
-                        mul_state <= 2'd0; 
-                    end
-                end
-
-                default: begin
-                    mul_state <= 2'd0;
-                    err <= 0;
                     res_x_phase <= 0;
+                    if (mul_invalid) begin
+                        err <= 1;
+                        res <= 0;
+                    end else begin
+                        err <= 0;
+                        shifted_opa = opa_reg << 1;
+                        res <= shifted_opa * opb_reg;
+                    end
+                    mul_state <= 0;
+                    mul_active <= 0;
                 end
                 endcase
             end
 
+            // ================= NORMAL OPS =================
             else if (mul_state == 0) begin
+                mul_active <= 0;
                 res_x_phase <= 0;
+                err <= 0;
 
                 if (MODE) begin
                     case(CMD)
-                    4'd0: if(INP_VALID == 2'b11) begin
+
+                    4'd0: if(INP_VALID==2'b11)
                         {cout, res[N-1:0]} <= OPA + OPB;
-                    end
 
-                    4'd1: if(INP_VALID == 2'b11) begin
+                    4'd1: if(INP_VALID==2'b11)
                         res <= OPA - OPB;
-                    end
 
-                    4'd2: if(INP_VALID == 2'b11) begin
+                    4'd2: if(INP_VALID==2'b11)
                         {cout, res[N-1:0]} <= OPA + OPB + CIN;
-                    end
 
-                    4'd3: if(INP_VALID == 2'b11) begin
+                    4'd3: if(INP_VALID==2'b11)
                         res <= OPA - OPB - CIN;
-                    end
 
-                    4'd4: if(INP_VALID == 2'b01) begin
+                    4'd4: if(INP_VALID==2'b01)
                         {cout, res} <= OPA + 1;
-                    end
 
-                    4'd5: if(INP_VALID == 2'b01) begin
+                    4'd5: if(INP_VALID==2'b01)
                         res <= OPA - 1;
-                    end
 
-                    4'd6: if(INP_VALID == 2'b10) begin
+                    4'd6: if(INP_VALID==2'b10)
                         {cout, res} <= OPB + 1;
-                    end
 
-                    4'd7: if(INP_VALID == 2'b10) begin
+                    4'd7: if(INP_VALID==2'b10)
                         res <= OPB - 1;
-                    end
 
-                    4'd8: if(INP_VALID == 2'b11) begin
+                    4'd8: if(INP_VALID==2'b11) begin
                         g <= (OPA > OPB);
                         e <= (OPA == OPB);
                         l <= (OPA < OPB);
                     end
 
-                    4'd11: if(INP_VALID == 2'b11) begin
+                    4'd11: if(INP_VALID==2'b11) begin
                         temp = $signed(OPA) + $signed(OPB);
                         res <= temp;
-                        oflow <= (OPA[N-1] == OPB[N-1]) && (temp[N-1] != OPA[N-1]);
-                        g <= ($signed(OPA) > $signed(OPB));
-                        e <= ($signed(OPA) == $signed(OPB));
-                        l <= ($signed(OPA) < $signed(OPB));
+                        oflow <= (OPA[N-1]==OPB[N-1]) && (temp[N-1]!=OPA[N-1]);
                     end
 
-                    4'd12: if(INP_VALID == 2'b11) begin
+                    4'd12: if(INP_VALID==2'b11) begin
                         temp = $signed(OPA) - $signed(OPB);
                         res <= temp;
-                        oflow <= (OPA[N-1] != OPB[N-1]) && (temp[N-1] != OPA[N-1]);
-                        g <= ($signed(OPA) > $signed(OPB));
-                        e <= ($signed(OPA) == $signed(OPB));
-                        l <= ($signed(OPA) < $signed(OPB));
+                        oflow <= (OPA[N-1]!=OPB[N-1]) && (temp[N-1]!=OPA[N-1]);
                     end
-                    default: err <= 0;
+
                     endcase
                 end
 
-                else begin  // !MODE - Logical/Shift operations
+                else begin
                     case(CMD)
-                    4'd0: if(INP_VALID == 2'b11) res <= (OPA & OPB);
-                    4'd1: if(INP_VALID == 2'b11) res <= ~(OPA & OPB);
-                    4'd2: if(INP_VALID == 2'b11) res <= (OPA | OPB);
-                    4'd3: if(INP_VALID == 2'b11) res <= ~(OPA | OPB);
-                    4'd4: if(INP_VALID == 2'b11) res <= (OPA ^ OPB);
-                    4'd5: if(INP_VALID == 2'b11) res <= ~(OPA ^ OPB);
+                    4'd0: if(INP_VALID==2'b11) res <= (OPA & OPB);
+                    4'd1: if(INP_VALID==2'b11) res <= ~(OPA & OPB);
+                    4'd2: if(INP_VALID==2'b11) res <= (OPA | OPB);
+                    4'd3: if(INP_VALID==2'b11) res <= ~(OPA | OPB);
+                    4'd4: if(INP_VALID==2'b11) res <= (OPA ^ OPB);
+                    4'd5: if(INP_VALID==2'b11) res <= ~(OPA ^ OPB);
                     4'd6: if(INP_VALID == 2'b01) res <= ~OPA;
                     4'd7: if(INP_VALID == 2'b10) res <= ~OPB;
                     4'd8: if(INP_VALID == 2'b01) res <= (OPA >> 1);
