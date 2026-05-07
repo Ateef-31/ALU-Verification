@@ -13,8 +13,13 @@ module alu #(parameter N = 8 , parameter M = 4)
     output reg ERR
 );
 
-    reg [2*N:0] res;
-    reg oflow, cout, g, l, e, err;
+    reg [2*N:0] res, res_d;
+    reg oflow, oflow_d;
+    reg cout, cout_d;
+    reg g, g_d;
+    reg l, l_d;
+    reg e, e_d;
+    reg err, err_d;
 
     reg [N-1:0] opa_reg, opb_reg;
     reg [1:0] mul_state;
@@ -36,24 +41,27 @@ module alu #(parameter N = 8 , parameter M = 4)
             RES = 0; OFLOW = 0; COUT = 0;
             G = 0; L = 0; E = 0; ERR = 0;
         end 
-        else if (mul_active) begin
+
+        // multiplication unchanged
+        else if (mul_active || mul_state != 0) begin
             RES = (res_x_phase) ? 0 : res;
             OFLOW = oflow;
             COUT = cout;
             G = g;
             L = l;
             E = e;
-            ERR = (res_x_phase) ? 0 : err;  // show only in 3rd cycle
+            ERR = (res_x_phase) ? 0 : err;
         end 
+
+        // normal operations delayed by 1 clock
         else begin
-            // Normal ops
-            RES = (res_x_phase) ? 0 : res;
-            OFLOW = oflow;
-            COUT = cout;
-            G = g;
-            L = l;
-            E = e;
-            ERR = err;
+            RES = res_d;
+            OFLOW = oflow_d;
+            COUT = cout_d;
+            G = g_d;
+            L = l_d;
+            E = e_d;
+            ERR = err_d;
         end
     end
 
@@ -62,6 +70,14 @@ module alu #(parameter N = 8 , parameter M = 4)
         if (RST) begin
             res <= 0; oflow <= 0; cout <= 0;
             g <= 0; l <= 0; e <= 0; err <= 0;
+
+            res_d <= 0;
+            oflow_d <= 0;
+            cout_d <= 0;
+            g_d <= 0;
+            l_d <= 0;
+            e_d <= 0;
+            err_d <= 0;
 
             mul_state <= 0;
             res_x_phase <= 0;
@@ -73,6 +89,16 @@ module alu #(parameter N = 8 , parameter M = 4)
         end
 
         else if (CE) begin
+
+            // 1-cycle delayed outputs
+            res_d <= res;
+            oflow_d <= oflow;
+            cout_d <= cout;
+            g_d <= g;
+            l_d <= l;
+            e_d <= e;
+            err_d <= err;
+
             // default flags
             oflow <= 0; cout <= 0; g <= 0;
             l <= 0; e <= 0; err <= 0;
@@ -214,22 +240,25 @@ module alu #(parameter N = 8 , parameter M = 4)
                     4'd9: if(INP_VALID == 2'b01) res <= (OPA << 1);
                     4'd10: if(INP_VALID == 2'b10) res <= (OPB >> 1);
                     4'd11: if(INP_VALID == 2'b10) res <= (OPB << 1);
+
                     4'd12: if(INP_VALID == 2'b11) begin
                         if (|OPB[N-1:4]) begin
-                            err <= 1;  // Error for invalid rotate amount
+                            err <= 1;
                         end
                         else begin
-                            res <= (OPA << OPB[$clog2(N) - 1:0]) | (OPA >> (N - OPB[$clog2(N) - 1:0]));
-                            end
+                            res <= (OPA << OPB[$clog2(N)-1:0]) |
+                                   (OPA >> (N - OPB[$clog2(N)-1:0]));
+                        end
                     end
 
                     4'd13: if(INP_VALID == 2'b11) begin
                         if (|OPB[N-1:4]) begin
-                            err <= 1;  // Error for invalid rotate amount
+                            err <= 1;
                         end
                         else begin
-                            res <= (OPA >> OPB[$clog2(N) - 1:0]) | (OPA << (N - OPB[$clog2(N) - 1:0]));
-                            end
+                            res <= (OPA >> OPB[$clog2(N)-1:0]) |
+                                   (OPA << (N - OPB[$clog2(N)-1:0]));
+                        end
                     end
 
                     default: err <= 0;
