@@ -40,7 +40,7 @@ module alu #(parameter N = 8 , parameter M = 4)
         if (!en) begin
             RES = 0; OFLOW = 0; COUT = 0;
             G = 0; L = 0; E = 0; ERR = 0;
-        end 
+        end
 
         else if (mul_active || mul_state != 0) begin
             RES = (res_x_phase) ? 0 : res;
@@ -50,9 +50,10 @@ module alu #(parameter N = 8 , parameter M = 4)
             L = l;
             E = e;
             ERR = (res_x_phase) ? 0 : err;
-        end 
+        end
 
         else begin
+            // one clock delayed outputs
             RES = res_d;
             OFLOW = oflow_d;
             COUT = cout_d;
@@ -87,17 +88,6 @@ module alu #(parameter N = 8 , parameter M = 4)
         end
 
         else if (CE) begin
-            res_d <= res;
-            oflow_d <= oflow;
-            cout_d <= cout;
-            g_d <= g;
-            l_d <= l;
-            e_d <= e;
-            err_d <= err;
-
-            // default flags
-            oflow <= 0; cout <= 0; g <= 0;
-            l <= 0; e <= 0; err <= 0;
 
             // ================= MULTIPLICATION CMD=9 =================
             if (MODE && CMD == 4'd9) begin
@@ -120,13 +110,25 @@ module alu #(parameter N = 8 , parameter M = 4)
 
                 2'd2: begin
                     res_x_phase <= 0;
+
                     if (mul_invalid) begin
-                        err <= 1;   
+                        err <= 1;
                         res <= 0;
-                    end else begin
+                    end
+                    else begin
                         err <= 0;
                         res <= (opa_reg + 1) * (opb_reg + 1);
                     end
+
+                    // delay register update AFTER multiplication result
+                    res_d <= res;
+                    oflow_d <= oflow;
+                    cout_d <= cout;
+                    g_d <= g;
+                    l_d <= l;
+                    e_d <= e;
+                    err_d <= err;
+
                     mul_state <= 0;
                     mul_active <= 0;
                 end
@@ -154,14 +156,26 @@ module alu #(parameter N = 8 , parameter M = 4)
 
                 2'd2: begin
                     res_x_phase <= 0;
+
                     if (mul_invalid) begin
                         err <= 1;
                         res <= 0;
-                    end else begin
+                    end
+                    else begin
                         err <= 0;
                         shifted_opa = opa_reg << 1;
                         res <= shifted_opa * opb_reg;
                     end
+
+                    // delay register update AFTER multiplication result
+                    res_d <= res;
+                    oflow_d <= oflow;
+                    cout_d <= cout;
+                    g_d <= g;
+                    l_d <= l;
+                    e_d <= e;
+                    err_d <= err;
+
                     mul_state <= 0;
                     mul_active <= 0;
                 end
@@ -170,72 +184,114 @@ module alu #(parameter N = 8 , parameter M = 4)
 
             // ================= NORMAL OPS =================
             else if (mul_state == 0) begin
+
+                // delayed outputs for normal ops
+                res_d <= res;
+                oflow_d <= oflow;
+                cout_d <= cout;
+                g_d <= g;
+                l_d <= l;
+                e_d <= e;
+                err_d <= err;
+
                 mul_active <= 0;
                 res_x_phase <= 0;
                 err <= 0;
+
+                // default flags
+                oflow <= 0;
+                cout <= 0;
+                g <= 0;
+                l <= 0;
+                e <= 0;
 
                 if (MODE) begin
                     case(CMD)
 
                     4'd0: if(INP_VALID==2'b11)
                         {cout, res[N-1:0]} <= OPA + OPB;
+                    else
+                        err <= 1;
 
                     4'd1: if(INP_VALID==2'b11)
                         res <= OPA - OPB;
+                    else
+                        err <= 1;
 
                     4'd2: if(INP_VALID==2'b11)
                         {cout, res[N-1:0]} <= OPA + OPB + CIN;
+                    else
+                        err <= 1;
 
                     4'd3: if(INP_VALID==2'b11)
                         res <= OPA - OPB - CIN;
+                    else
+                        err <= 1;
 
                     4'd4: if(INP_VALID==2'b01)
                         {cout, res} <= OPA + 1;
+                    else
+                        err <= 1;
 
                     4'd5: if(INP_VALID==2'b01)
                         res <= OPA - 1;
+                    else
+                        err <= 1;
 
                     4'd6: if(INP_VALID==2'b10)
                         {cout, res} <= OPB + 1;
+                    else
+                        err <= 1;
 
                     4'd7: if(INP_VALID==2'b10)
                         res <= OPB - 1;
+                    else
+                        err <= 1;
 
                     4'd8: if(INP_VALID==2'b11) begin
                         g <= (OPA > OPB);
                         e <= (OPA == OPB);
                         l <= (OPA < OPB);
                     end
+                    else
+                        err <= 1;
 
                     4'd11: if(INP_VALID==2'b11) begin
                         temp = $signed(OPA) + $signed(OPB);
                         res <= temp;
-                        oflow <= (OPA[N-1]==OPB[N-1]) && (temp[N-1]!=OPA[N-1]);
+                        oflow <= (OPA[N-1]==OPB[N-1]) &&
+                                  (temp[N-1]!=OPA[N-1]);
                     end
+                    else
+                        err <= 1;
 
                     4'd12: if(INP_VALID==2'b11) begin
                         temp = $signed(OPA) - $signed(OPB);
                         res <= temp;
-                        oflow <= (OPA[N-1]!=OPB[N-1]) && (temp[N-1]!=OPA[N-1]);
+                        oflow <= (OPA[N-1]!=OPB[N-1]) &&
+                                  (temp[N-1]!=OPA[N-1]);
                     end
+                    else
+                        err <= 1;
 
                     endcase
                 end
 
                 else begin
                     case(CMD)
-                    4'd0: if(INP_VALID==2'b11) res <= (OPA & OPB);
-                    4'd1: if(INP_VALID==2'b11) res <= ~(OPA & OPB);
-                    4'd2: if(INP_VALID==2'b11) res <= (OPA | OPB);
-                    4'd3: if(INP_VALID==2'b11) res <= ~(OPA | OPB);
-                    4'd4: if(INP_VALID==2'b11) res <= (OPA ^ OPB);
-                    4'd5: if(INP_VALID==2'b11) res <= ~(OPA ^ OPB);
-                    4'd6: if(INP_VALID == 2'b01) res <= ~OPA;
-                    4'd7: if(INP_VALID == 2'b10) res <= ~OPB;
-                    4'd8: if(INP_VALID == 2'b01) res <= (OPA >> 1);
-                    4'd9: if(INP_VALID == 2'b01) res <= (OPA << 1);
-                    4'd10: if(INP_VALID == 2'b10) res <= (OPB >> 1);
-                    4'd11: if(INP_VALID == 2'b10) res <= (OPB << 1);
+
+                    4'd0: if(INP_VALID==2'b11) res <= (OPA & OPB); else err <= 1;
+                    4'd1: if(INP_VALID==2'b11) res <= ~(OPA & OPB); else err <= 1;
+                    4'd2: if(INP_VALID==2'b11) res <= (OPA | OPB); else err <= 1;
+                    4'd3: if(INP_VALID==2'b11) res <= ~(OPA | OPB); else err <= 1;
+                    4'd4: if(INP_VALID==2'b11) res <= (OPA ^ OPB); else err <= 1;
+                    4'd5: if(INP_VALID==2'b11) res <= ~(OPA ^ OPB); else err <= 1;
+                    4'd6: if(INP_VALID==2'b01) res <= ~OPA; else err <= 1;
+                    4'd7: if(INP_VALID==2'b10) res <= ~OPB; else err <= 1;
+                    4'd8: if(INP_VALID==2'b01) res <= (OPA >> 1); else err <= 1;
+                    4'd9: if(INP_VALID==2'b01) res <= (OPA << 1); else err <= 1;
+                    4'd10: if(INP_VALID==2'b10) res <= (OPB >> 1); else err <= 1;
+                    4'd11: if(INP_VALID==2'b10) res <= (OPB << 1); else err <= 1;
 
                     4'd12: if(INP_VALID == 2'b11) begin
                         if (|OPB[N-1:4]) begin
@@ -258,6 +314,7 @@ module alu #(parameter N = 8 , parameter M = 4)
                     end
 
                     default: err <= 0;
+
                     endcase
                 end
             end
