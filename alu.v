@@ -42,7 +42,6 @@ module alu #(parameter N = 8 , parameter M = 4)
             G = 0; L = 0; E = 0; ERR = 0;
         end 
 
-        // multiplication unchanged
         else if (mul_active || mul_state != 0) begin
             RES = (res_x_phase) ? 0 : res;
             OFLOW = oflow;
@@ -53,7 +52,6 @@ module alu #(parameter N = 8 , parameter M = 4)
             ERR = (res_x_phase) ? 0 : err;
         end 
 
-        // normal operations delayed by 1 clock
         else begin
             RES = res_d;
             OFLOW = oflow_d;
@@ -89,8 +87,6 @@ module alu #(parameter N = 8 , parameter M = 4)
         end
 
         else if (CE) begin
-
-            // 1-cycle delayed outputs
             res_d <= res;
             oflow_d <= oflow;
             cout_d <= cout;
