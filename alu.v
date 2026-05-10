@@ -1,338 +1,485 @@
-module alu #(parameter N = 8 , parameter M = 4)
+module alu #(parameter N = 8, parameter M = 4)
 (
-    input CLK , RST , CE , CIN , MODE,
-    input [1:0] INP_VALID,
-    input [N-1:0] OPA, OPB,
-    input [M-1:0] CMD,
-    output reg [2*N:0] RES,
-    output reg OFLOW,
-    output reg COUT,
-    output reg G,
-    output reg L,
-    output reg E,
-    output reg ERR
+    input              CLK,
+    input              RST,
+    input              CE,
+    input              CIN,
+    input              MODE,
+    input      [1:0]   INP_VALID,
+    input      [N-1:0] OPA,
+    input      [N-1:0] OPB,
+    input      [M-1:0] CMD,
+    output reg [2*N-1:0] RES,
+    output reg         OFLOW,
+    output reg         COUT,
+    output reg         G,
+    output reg         L,
+    output reg         E,
+    output reg         ERR
 );
 
-    reg [2*N:0] res, res_d;
-    reg oflow, oflow_d;
-    reg cout, cout_d;
-    reg g, g_d;
-    reg l, l_d;
-    reg e, e_d;
-    reg err, err_d;
-
-    reg [N-1:0] opa_reg, opb_reg;
-    reg [1:0] mul_state;
-    reg res_x_phase;
-
-    reg [N:0] temp;
-    reg [2*N:0] mul_result;
-    reg [N-1:0] shifted_opa;
-
-    reg mul_invalid;
-
-    reg mul_active;
-
-    wire en = CE & ~RST;
-
-    // ================= OUTPUT LOGIC =================
-    always @(*) begin
-        if (!en) begin
-            RES = 0; OFLOW = 0; COUT = 0;
-            G = 0; L = 0; E = 0; ERR = 0;
-        end
-
-        else if (mul_active || mul_state != 0) begin
-            RES = (res_x_phase) ? 0 : res;
-            OFLOW = oflow;
-            COUT = cout;
-            G = g;
-            L = l;
-            E = e;
-            ERR = (res_x_phase) ? 0 : err;
-        end
-
-        else begin
-            // one clock delayed outputs
-            RES = res_d;
-            OFLOW = oflow_d;
-            COUT = cout_d;
-            G = g_d;
-            L = l_d;
-            E = e_d;
-            ERR = err_d;
-        end
-    end
-
-    // ================= MAIN LOGIC =================
+    reg              p_valid;
+    reg              p_mode;
+    reg              p_cin;
+    reg [1:0]        p_inp_valid;
+    reg [N-1:0]      p_opa;
+    reg [N-1:0]      p_opb;
+    reg [M-1:0]      p_cmd;
+    reg              mul_wait;
+    reg [N-1:0]      mul_opa;
+    reg [N-1:0]      mul_opb;
+    reg [M-1:0]      mul_cmd;
+    reg [1:0]        mul_inp_valid;
+    reg [N:0]        tmp_ext;
+    reg [N-1:0]      tmp_n;
+    reg [2*N-1:0]      tmp_wide;
+    // ------------------------------------------------------------
     always @(posedge CLK or posedge RST) begin
         if (RST) begin
-            res <= 0; oflow <= 0; cout <= 0;
-            g <= 0; l <= 0; e <= 0; err <= 0;
-
-            res_d <= 0;
-            oflow_d <= 0;
-            cout_d <= 0;
-            g_d <= 0;
-            l_d <= 0;
-            e_d <= 0;
-            err_d <= 0;
-
-            mul_state <= 0;
-            res_x_phase <= 0;
-            opa_reg <= 0; opb_reg <= 0;
-
-            temp <= 0; mul_result <= 0; shifted_opa <= 0;
-            mul_invalid <= 0;
-            mul_active <= 0;
+            RES          <= {(2*N+1){1'b0}};
+            OFLOW        <= 1'b0;
+            COUT         <= 1'b0;
+            G            <= 1'b0;
+            L            <= 1'b0;
+            E            <= 1'b0;
+            ERR          <= 1'b0;
+            // stage 1 sample registers
+            p_valid      <= 1'b0;
+            p_mode       <= 1'b0;
+            p_cin        <= 1'b0;
+            p_inp_valid  <= 2'b00;
+            p_opa        <= {N{1'b0}};
+            p_opb        <= {N{1'b0}};
+            p_cmd        <= {M{1'b0}};
+            // multiply pipeline registers
+            mul_wait     <= 1'b0;
+            mul_opa      <= {N{1'b0}};
+            mul_opb      <= {N{1'b0}};
+            mul_cmd      <= {M{1'b0}};
+            mul_inp_valid<= 2'b00;
+            // temp
+            tmp_ext      <= {(N+1){1'b0}};
+            tmp_n        <= {N{1'b0}};
+            tmp_wide     <= {(2*N+1){1'b0}};
         end
-
         else if (CE) begin
-
-            // ================= MULTIPLICATION CMD=9 =================
-            if (MODE && CMD == 4'd9) begin
-                case(mul_state)
-
-                2'd0: begin
-                    res_x_phase <= 1;
-                    mul_invalid <= (INP_VALID != 2'b11);
-                    mul_active <= 1;
-                    opa_reg <= OPA;
-                    opb_reg <= OPB;
-                    mul_state <= 2'd1;
-                end
-
-                2'd1: begin
-                    res_x_phase <= 1;
-                    mul_invalid <= mul_invalid | (INP_VALID != 2'b11);
-                    mul_state <= 2'd2;
-                end
-
-                2'd2: begin
-                    res_x_phase <= 0;
-
-                    if (mul_invalid) begin
-                        err <= 1;
-                        res <= 0;
+            // MULTIPLICATION RESULT STAGE
+            // cycle 3 : compute and output result
+            if (mul_wait) begin
+                // check if MODE and CMD are still same as multiply
+                if (MODE && (CMD == mul_cmd)) begin
+                    OFLOW <= 1'b0;
+                    COUT  <= 1'b0;
+                    G     <= 1'b0;
+                    L     <= 1'b0;
+                    E     <= 1'b0;
+                    ERR   <= 1'b0;
+                    RES   <= {(2*N+1){1'b0}};
+                    // check validity
+                    if (mul_inp_valid != 2'b11) begin
+                        ERR <= 1'b1;
+                        RES <= {(2*N+1){1'b0}};
                     end
                     else begin
-                        err <= 0;
-                        res <= (opa_reg + 1) * (opb_reg + 1);
+                        case (mul_cmd)
+                            4'd9: begin
+                                // (OPA+1) * (OPB+1)
+                                tmp_wide = ({1'b0, mul_opa} + {{N{1'b0}}, 1'b1}) *
+                                           ({1'b0, mul_opb} + {{N{1'b0}}, 1'b1});
+                                RES  <= tmp_wide;
+                                ERR  <= 1'b0;
+                            end
+                            4'd10: begin
+                                // (OPA << 1) * OPB
+                                tmp_wide = ({1'b0, (mul_opa << 1)}) *
+                                           ({1'b0, mul_opb});
+                                RES  <= tmp_wide;
+                                ERR  <= 1'b0;
+                            end
+                            default: begin
+                                ERR <= 1'b1;
+                                RES <= {(2*N+1){1'b0}};
+                            end
+                        endcase
                     end
-
-                    // delay register update AFTER multiplication result
-                    res_d <= res;
-                    oflow_d <= oflow;
-                    cout_d <= cout;
-                    g_d <= g;
-                    l_d <= l;
-                    e_d <= e;
-                    err_d <= err;
-
-                    mul_state <= 0;
-                    mul_active <= 0;
+                    // done with multiplication
+                    mul_wait <= 1'b0;
+                    // sample current inputs for next operation
+                    p_valid     <= 1'b1;
+                    p_mode      <= MODE;
+                    p_cin       <= CIN;
+                    p_inp_valid <= INP_VALID;
+                    p_opa       <= OPA;
+                    p_opb       <= OPB;
+                    p_cmd       <= CMD;
                 end
-                endcase
-            end
-
-            // ================= MULTIPLICATION CMD=10 =================
-            else if (MODE && CMD == 4'd10) begin
-                case(mul_state)
-
-                2'd0: begin
-                    res_x_phase <= 1;
-                    mul_invalid <= (INP_VALID != 2'b11);
-                    mul_active <= 1;
-                    opa_reg <= OPA;
-                    opb_reg <= OPB;
-                    mul_state <= 2'd1;
-                end
-
-                2'd1: begin
-                    res_x_phase <= 1;
-                    mul_invalid <= mul_invalid | (INP_VALID != 2'b11);
-                    mul_state <= 2'd2;
-                end
-
-                2'd2: begin
-                    res_x_phase <= 0;
-
-                    if (mul_invalid) begin
-                        err <= 1;
-                        res <= 0;
-                    end
-                    else begin
-                        err <= 0;
-                        shifted_opa = opa_reg << 1;
-                        res <= shifted_opa * opb_reg;
-                    end
-
-                    // delay register update AFTER multiplication result
-                    res_d <= res;
-                    oflow_d <= oflow;
-                    cout_d <= cout;
-                    g_d <= g;
-                    l_d <= l;
-                    e_d <= e;
-                    err_d <= err;
-
-                    mul_state <= 0;
-                    mul_active <= 0;
-                end
-                endcase
-            end
-
-            // ================= NORMAL OPS =================
-            else if (mul_state == 0) begin
-
-                // delayed outputs for normal ops
-                res_d <= res;
-                oflow_d <= oflow;
-                cout_d <= cout;
-                g_d <= g;
-                l_d <= l;
-                e_d <= e;
-                err_d <= err;
-
-                mul_active <= 0;
-                res_x_phase <= 0;
-                err <= 0;
-
-                // default flags
-                oflow <= 0;
-                cout <= 0;
-                g <= 0;
-                l <= 0;
-                e <= 0;
-
-                if (MODE) begin
-                    case(CMD)
-
-                    4'd0: if(INP_VALID==2'b11)
-                        {cout, res[N-1:0]} <= OPA + OPB;
-                    else
-                        err <= 1;
-
-                    4'd1: if(INP_VALID==2'b11)
-                        res <= OPA - OPB;
-                    else
-                        err <= 1;
-
-                    4'd2: if(INP_VALID==2'b11)
-                        {cout, res[N-1:0]} <= OPA + OPB + CIN;
-                    else
-                        err <= 1;
-
-                    4'd3: if(INP_VALID==2'b11)
-                        res <= OPA - OPB - CIN;
-                    else
-                        err <= 1;
-
-                    4'd4: if(INP_VALID==2'b01)
-                        {cout, res} <= OPA + 1;
-                    else
-                        err <= 1;
-
-                    4'd5: if(INP_VALID==2'b01)
-                        res <= OPA - 1;
-                    else
-                        err <= 1;
-
-                    4'd6: if(INP_VALID==2'b10)
-                        {cout, res} <= OPB + 1;
-                    else
-                        err <= 1;
-
-                    4'd7: if(INP_VALID==2'b10)
-                        res <= OPB - 1;
-                    else
-                        err <= 1;
-
-                    4'd8: if(INP_VALID==2'b11) begin
-                        g <= (OPA > OPB);
-                        e <= (OPA == OPB);
-                        l <= (OPA < OPB);
-                    end
-                    else
-                        err <= 1;
-
-                    4'd11: if(INP_VALID==2'b11) begin
-                        temp = $signed(OPA) + $signed(OPB);
-                        res <= temp;
-                        oflow <= (OPA[N-1]==OPB[N-1]) &&
-                                  (temp[N-1]!=OPA[N-1]);
-                    end
-                    else
-                        err <= 1;
-
-                    4'd12: if(INP_VALID==2'b11) begin
-                        temp = $signed(OPA) - $signed(OPB);
-                        res <= temp;
-                        oflow <= (OPA[N-1]!=OPB[N-1]) &&
-                                  (temp[N-1]!=OPA[N-1]);
-                    end
-                    else
-                        err <= 1;
-
-                    endcase
-                end
-
                 else begin
-                    case(CMD)
-
-                    4'd0: if(INP_VALID==2'b11) res <= (OPA & OPB); else err <= 1;
-                    4'd1: if(INP_VALID==2'b11) res <= ~(OPA & OPB); else err <= 1;
-                    4'd2: if(INP_VALID==2'b11) res <= (OPA | OPB); else err <= 1;
-                    4'd3: if(INP_VALID==2'b11) res <= ~(OPA | OPB); else err <= 1;
-                    4'd4: if(INP_VALID==2'b11) res <= (OPA ^ OPB); else err <= 1;
-                    4'd5: if(INP_VALID==2'b11) res <= ~(OPA ^ OPB); else err <= 1;
-                    4'd6: if(INP_VALID==2'b01) res <= ~OPA; else err <= 1;
-                    4'd7: if(INP_VALID==2'b10) res <= ~OPB; else err <= 1;
-                    4'd8: if(INP_VALID==2'b01) res <= (OPA >> 1); else err <= 1;
-                    4'd9: if(INP_VALID==2'b01) res <= (OPA << 1); else err <= 1;
-                    4'd10: if(INP_VALID==2'b10) res <= (OPB >> 1); else err <= 1;
-                    4'd11: if(INP_VALID==2'b10) res <= (OPB << 1); else err <= 1;
-
-                    4'd12: if(INP_VALID == 2'b11) begin
-                        if (|OPB[N-1:4]) begin
-                            err <= 1;
-                        end
-                        else begin
-                            res <= (OPA << OPB[$clog2(N)-1:0]) |
-                                   (OPA >> (N - OPB[$clog2(N)-1:0]));
-                        end
-                    end
-
-                    4'd13: if(INP_VALID == 2'b11) begin
-                        if (|OPB[N-1:4]) begin
-                            err <= 1;
-                        end
-                        else begin
-                            res <= (OPA >> OPB[$clog2(N)-1:0]) |
-                                   (OPA << (N - OPB[$clog2(N)-1:0]));
-                        end
-                    end
-
-                    default: err <= 0;
-
-                    endcase
+                    // MODE or CMD changed during multiplication
+                    // cancel multiplication
+                    mul_wait <= 1'b0;
+                    // sample new command for next cycle processing
+                    p_valid     <= 1'b1;
+                    p_mode      <= MODE;
+                    p_cin       <= CIN;
+                    p_inp_valid <= INP_VALID;
+                    p_opa       <= OPA;
+                    p_opb       <= OPB;
+                    p_cmd       <= CMD;
                 end
             end
-
+            // NORMAL OPERATION
             else begin
-                mul_state   <= mul_state;
-                res_x_phase <= res_x_phase;
-                opa_reg <= opa_reg;
-                opb_reg <= opb_reg;
-                res <= res;
-                cout <= cout;
-                oflow <= oflow;
-                g <= g;
-                l <= l;
-                e <= e;
-                err <= err;
+                if (p_valid) begin
+                    // ------------------------------------------------
+                    // pending command is multiplication
+                    // cycle 2 : validate and move to multiply pipeline
+                    // ------------------------------------------------
+                    if (p_mode && ((p_cmd == 4'd9) || (p_cmd == 4'd10))) begin
+                        // check if current MODE and CMD still same
+                        if (MODE && (CMD == p_cmd)) begin
+                            // move to multiply pipeline
+                            mul_wait      <= 1'b1;
+                            mul_opa       <= p_opa;
+                            mul_opb       <= p_opb;
+                            mul_cmd       <= p_cmd;
+                            mul_inp_valid <= p_inp_valid;
+                            p_valid <= 1'b0;
+                        end
+                        else begin
+                            // MODE or CMD changed, cancel pending multiply
+                            // sample new command instead
+                            p_valid     <= 1'b1;
+                            p_mode      <= MODE;
+                            p_cin       <= CIN;
+                            p_inp_valid <= INP_VALID;
+                            p_opa       <= OPA;
+                            p_opb       <= OPB;
+                            p_cmd       <= CMD;
+                        end
+                    end
+                    // ------------------------------------------------
+                    // pending command is normal operation
+                    // cycle 2 : compute and output result
+                    // ------------------------------------------------
+                    else begin
+                        RES   <= {(2*N+1){1'b0}};
+                        OFLOW <= 1'b0;
+                        COUT  <= 1'b0;
+                        G     <= 1'b0;
+                        L     <= 1'b0;
+                        E     <= 1'b0;
+                        ERR   <= 1'b0;
+                        if (p_mode) begin
+                            case (p_cmd)
+                                // CMD 0 : Unsigned Addition
+                                4'd0: begin
+                                    if (p_inp_valid == 2'b11) begin
+                                        tmp_ext      = {1'b0, p_opa} + {1'b0, p_opb};
+                                        RES          <= {{(N+1){1'b0}}, tmp_ext[N-1:0]};
+                                        COUT         <= tmp_ext[N];
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 1 : Unsigned Subtraction
+                                4'd1: begin
+                                    if (p_inp_valid == 2'b11) begin
+                                        tmp_n  = p_opa - p_opb;
+                                        RES   <= {{(N+1){1'b0}}, tmp_n};
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 2 : Unsigned Addition with Carry In
+                                4'd2: begin
+                                    if (p_inp_valid == 2'b11) begin
+                                        tmp_ext = {1'b0, p_opa} + {1'b0, p_opb} +
+                                                  {{N{1'b0}}, p_cin};
+                                        RES  <= {{(N+1){1'b0}}, tmp_ext[N-1:0]};
+                                        COUT <= tmp_ext[N];
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 3 : Unsigned Subtraction with Borrow In
+                                4'd3: begin
+                                    if (p_inp_valid == 2'b11) begin
+                                        tmp_n = p_opa - p_opb - {{(N-1){1'b0}}, p_cin};
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 4 : Increment A
+                                4'd4: begin
+                                    if (p_inp_valid[0] == 1) begin
+                                        tmp_ext = {1'b0, p_opa} + {{N{1'b0}}, 1'b1};
+                                        RES  <= {{(N+1){1'b0}}, tmp_ext[N-1:0]};
+                                        COUT <= tmp_ext[N];
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 5 : Decrement A
+                                4'd5: begin
+                                    if (p_inp_valid[0] == 1) begin
+                                        tmp_n = p_opa - {{(N-1){1'b0}}, 1'b1};
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 6 : Increment B
+                                4'd6: begin
+                                    if (p_inp_valid[1] == 1) begin
+                                        tmp_ext = {1'b0, p_opb} + {{N{1'b0}}, 1'b1};
+                                        RES  <= {{(N+1){1'b0}}, tmp_ext[N-1:0]};
+                                        COUT <= tmp_ext[N];
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 7 : Decrement B
+                                4'd7: begin
+                                    if (p_inp_valid[1] == 1) begin
+                                        tmp_n = p_opb - {{(N-1){1'b0}}, 1'b1};
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 8 : Compare A and B
+                                4'd8: begin
+                                    if (p_inp_valid == 2'b11) begin
+                                        G <= (p_opa > p_opb);
+                                        L <= (p_opa < p_opb);
+                                        E <= (p_opa == p_opb);
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 9 : Multiplication handled by pipeline
+                                4'd9: begin
+                                    ERR <= 1'b1;
+                                end
+                                // CMD 10 : Multiplication handled by pipeline
+                                4'd10: begin
+                                    ERR <= 1'b1;
+                                end
+                                // CMD 11 : Signed Addition with Overflow
+                                4'd11: begin
+                                    if (p_inp_valid == 2'b11) begin
+                                        tmp_n = $signed(p_opa) + $signed(p_opb);
+                                        RES   <= {{(N+1){1'b0}}, tmp_n};
+                                        OFLOW <= (p_opa[N-1]==p_opb[N-1]) && (tmp_n[N-1]!= p_opa[N-1]);
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 12 : Signed Subtraction with Overflow
+                                4'd12: begin
+                                    if (p_inp_valid == 2'b11) begin
+                                        tmp_n = $signed(p_opa) - $signed(p_opb);
+                                        RES   <= {{(N+1){1'b0}}, tmp_n};
+                                        OFLOW <= (p_opa[N-1]!=p_opb[N-1]) && (tmp_n[N-1]!= p_opa[N-1]);
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD > 12 in arithmetic : error
+                                default: begin
+                                    ERR <= 1'b1;
+                                end
+                            endcase
+                        end
+                        else begin
+                            case (p_cmd)
+                                // CMD 0 : AND
+                                4'd0: begin
+                                    if (p_inp_valid == 2'b11) begin
+                                        tmp_n = p_opa & p_opb;
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 1 : NAND
+                                4'd1: begin
+                                    if (p_inp_valid == 2'b11) begin
+                                        tmp_n = ~(p_opa & p_opb);
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 2 : OR
+                                4'd2: begin
+                                    if (p_inp_valid == 2'b11) begin
+                                        tmp_n = p_opa | p_opb;
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 3 : NOR
+                                4'd3: begin
+                                    if (p_inp_valid == 2'b11) begin
+                                        tmp_n = ~(p_opa | p_opb);
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 4 : XOR
+                                4'd4: begin
+                                    if (p_inp_valid == 2'b11) begin
+                                        tmp_n = p_opa ^ p_opb;
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 5 : XNOR
+                                4'd5: begin
+                                    if (p_inp_valid == 2'b11) begin
+                                        tmp_n = ~(p_opa ^ p_opb);
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 6 : NOT A
+                                4'd6: begin
+                                    if (p_inp_valid[0] == 1) begin
+                                        tmp_n = ~p_opa;
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 7 : NOT B
+                                4'd7: begin
+                                    if (p_inp_valid[1] == 1) begin
+                                        tmp_n = ~p_opb;
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 8 : Shift Right A by 1
+                                4'd8: begin
+                                    if (p_inp_valid[0] == 1) begin
+                                        tmp_n = p_opa >> 1;
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 9 : Shift Left A by 1
+                                4'd9: begin
+                                    if (p_inp_valid[0] == 1) begin
+                                        tmp_n = p_opa << 1;
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 10 : Shift Right B by 1
+                                4'd10: begin
+                                    if (p_inp_valid[1] == 1) begin
+                                        tmp_n = p_opb >> 1;
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 11 : Shift Left B by 1
+                                4'd11: begin
+                                    if (p_inp_valid[1] == 1) begin
+                                        tmp_n = p_opb << 1;
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD 12 : ROL A by OPB[2:0]
+                                // ERR if OPB[N-1:4] has any 1
+                                // result still computed from OPB[2:0]
+                                4'd12: begin
+                                    if (p_inp_valid == 2'b11) begin
+                                        tmp_n = (p_opa << p_opb[$clog2(N)-1:0]) |
+                                                (p_opa >> (N - p_opb[$clog2(N)-1:0]));
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                        if (|p_opb[N-1:4]) begin
+                                            ERR <= 1'b1;
+                                        end
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                4'd13: begin
+                                    if (p_inp_valid == 2'b11) begin
+                                        tmp_n = (p_opa >> p_opb[$clog2(N)-1:0]) |
+                                                (p_opa << (N - p_opb[$clog2(N)-1:0]));
+                                        RES  <= {{(N+1){1'b0}}, tmp_n};
+                                        if (|p_opb[N-1:4]) begin
+                                            ERR <= 1'b1;
+                                        end
+                                    end
+                                    else begin
+                                        ERR <= 1'b1;
+                                    end
+                                end
+                                // CMD > 13 in logical : error
+                                default: begin
+                                    ERR <= 1'b1;
+                                end
+                            endcase
+                        end
+                        p_valid     <= 1'b1;
+                        p_mode      <= MODE;
+                        p_cin       <= CIN;
+                        p_inp_valid <= INP_VALID;
+                        p_opa       <= OPA;
+                        p_opb       <= OPB;
+                        p_cmd       <= CMD;
+                    end
+                end
+                else begin
+                    p_valid     <= 1'b1;
+                    p_mode      <= MODE;
+                    p_cin       <= CIN;
+                    p_inp_valid <= INP_VALID;
+                    p_opa       <= OPA;
+                    p_opb       <= OPB;
+                    p_cmd       <= CMD;
+                end
             end
         end
     end
-
 endmodule
+
