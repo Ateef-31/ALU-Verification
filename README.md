@@ -6,7 +6,7 @@ The project also includes a **self-checking verification environment** with a re
 
 ---
 
-# 📌 Project Highlights
+#  Project Highlights
 
  Parameterized ALU Architecture  
  Arithmetic + Logical Modes  
